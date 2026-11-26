@@ -23,6 +23,8 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# apps/ were copied as-is from the old repos; lint them once they are rewired to the library.
+extend-exclude = ["apps"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

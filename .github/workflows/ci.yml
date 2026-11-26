@@ -19,3 +19,24 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: pytest -q
+
+  apps:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [sequential_monitor, sample_size_calculator]
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: App imports
+        run: python -c "import app"
+      - name: Sanity tests
+        if: matrix.app == 'sequential_monitor'
+        run: python tests/test_sanity.py

@@ -9,6 +9,16 @@ A Python toolkit for designing and analyzing A/B tests.
 | `abtest.bayesian` | Beta-Binomial posterior: P(B > A), expected lift, expected loss |
 | `abtest.sequential` | Mixture SPRT with always-valid p-values, safe to check at every look |
 
+## Apps
+
+| App | Run it |
+|---|---|
+| [Sequential test monitor](apps/sequential_monitor/) — mSPRT + Bayesian, peek-safe | `cd apps/sequential_monitor && pip install -r requirements.txt && python app.py` |
+| [Sample size calculator](apps/sample_size_calculator/) — power curve and test duration | `cd apps/sample_size_calculator && pip install -r requirements.txt && python app.py` |
+
+Both were copied from their original repos and still use their own math for now;
+see [docs/REPO_PLAN.md](docs/REPO_PLAN.md) for the plan to move them onto the library.
+
 ## Install
 
 ```bash

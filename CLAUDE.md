@@ -15,6 +15,11 @@ Python package `abtest` (src layout) for A/B test design and analysis.
   (e.g. scipy) in tests; simulations must use a fixed seed.
 - Keep dependencies to numpy and scipy unless there's a strong reason.
 
+## Apps
+- `apps/<name>/` are self-contained Dash apps with their own `requirements.txt` and venv; run them from their folder.
+- They are mid-migration onto `abtest`; see `docs/REPO_PLAN.md` before changing their math.
+- `apps/sequential_monitor` tests: `python tests/test_sanity.py` from that folder.
+
 ## Workflow
 - Run tests and ruff before every commit; CI (`.github/workflows/ci.yml`) must stay green.
 - Work on a feature branch; don't push directly to `main` unless the owner asks.
