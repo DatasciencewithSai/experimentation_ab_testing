@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from scipy import stats
 
 from abtest import two_proportion_ztest, welch_ttest
@@ -23,3 +24,18 @@ def test_welch_matches_scipy():
     ref = stats.ttest_ind(b, a, equal_var=False)
     assert np.isclose(r.statistic, ref.statistic)
     assert np.isclose(r.p_value, ref.pvalue)
+
+
+def test_welch_zero_variance():
+    same = welch_ttest([1.0, 1.0, 1.0], [1.0, 1.0])
+    assert same.p_value == 1.0 and same.effect == 0
+    shifted = welch_ttest([1.0, 1.0, 1.0], [2.0, 2.0])
+    assert shifted.p_value == 0.0 and shifted.ci_low == shifted.ci_high == 1.0
+
+
+def test_ztest_unpooled_matches_manual():
+    r = two_proportion_ztest(100, 1000, 130, 1200, pooled=False)
+    p_a, p_b = 0.1, 130 / 1200
+    se = np.sqrt(p_a * (1 - p_a) / 1000 + p_b * (1 - p_b) / 1200)
+    assert r.statistic == pytest.approx((p_b - p_a) / se)
+    assert r.p_value == pytest.approx(2 * stats.norm.sf(abs(r.statistic)))
