@@ -303,10 +303,12 @@ const BOX = { x:345, y:520, w:260, h:170 };
 const DEST = { A:{ x:740, y:300, w:250, h:200 }, B:{ x:740, y:710, w:250, h:200 } };
 const DOTS = (() => {
   const r = mulberry(20261126), arr = [];
-  for (let i = 0; i < 120; i++){
-    const ts = 3.6 + i * (4.4/120) + r()*0.05;
-    const bucket = Math.floor(r()*100);
-    arr.push({ ts, bucket, y0: 360 + r()*480, v: bucket < 50 ? 'A' : 'B', jy: (r()-.5)*90, jx: (r()-.5)*60 });
+  // 59 A + 60 B, shuffled; with the example user (A) the stream ends exactly 60 / 60
+  const vs = Array.from({ length:119 }, (_, i) => i < 59 ? 'A' : 'B');
+  for (let i = vs.length - 1; i > 0; i--){ const j = Math.floor(r() * (i + 1)); [vs[i], vs[j]] = [vs[j], vs[i]]; }
+  for (let i = 0; i < vs.length; i++){
+    const ts = 3.6 + i * (4.0/120) + r()*0.05;
+    arr.push({ ts, y0: 360 + r()*480, v: vs[i], jy: (r()-.5)*90, jx: (r()-.5)*60 });
   }
   return arr;
 })();
@@ -341,9 +343,10 @@ function sRandom(lt){
       card(d.x, d.y, d.w, d.h, { stroke: v === 'B' ? 'rgba(59,130,246,.5)' : C.line });
       text(v === 'A' ? 'VARIANT A' : 'VARIANT B', d.x + 24, d.y + 40, { size:16, w:700, font:MONO, color: v === 'A' ? C.text : C.B, ls:2 });
       cartButton(d.x + d.w/2, d.y + 90, 200, 50, v, { fs:17, glow:.5 });
-      const n = v === 'A' ? nA : nB;
-      text(fmt(n), d.x + 24, d.y + 172, { size:34, w:800 });
-      text('users', d.x + 28 + measure(fmt(n), 34, 800), d.y + 172, { size:18, w:500, color:C.muted });
+      const n = v === 'A' ? nA : nB, tot = nA + nB;
+      const share = tot >= 6 ? `${(100 * n / tot).toFixed(1)}%` : '—';
+      text(share, d.x + 24, d.y + 172, { size:34, w:800 });
+      text('of visitors', d.x + 30 + measure(share, 34, 800), d.y + 172, { size:18, w:500, color:C.muted });
     }
   });
 
@@ -438,7 +441,7 @@ function sAlloc(lt){
     text('of eligible traffic', px + 24, gy + 160, { size:18, w:500, color:C.muted });
     ctx.save(); rr(px + 24, gy + 190, pw - 48, 14, 7); ctx.fillStyle = C.card2; ctx.fill();
     rr(px + 24, gy + 190, (pw - 48) * expo / 100, 14, 7); ctx.fillStyle = C.B; ctx.fill(); ctx.restore();
-    text(lt < ramp2s ? 'Day 1 · safety ramp' : 'Full rollout', px + 24, gy + 234, { size:16, w:600, font:MONO, color:C.muted });
+    text(lt < ramp2s ? 'Safety ramp, pre-launch' : 'Full rollout', px + 24, gy + 234, { size:16, w:600, font:MONO, color:C.muted });
 
     card(px, gy + 270, pw, 200);
     text('SPLIT', px + 24, gy + 314, { size:16, w:700, font:MONO, color:C.B, ls:2 });
@@ -466,7 +469,7 @@ function cumAt(arr, d){ // d continuous in [0, 14]
   return i >= DAYS - 1 ? arr[DAYS-1] : lerp(arr[i], arr[i+1], f);
 }
 function sMeasure(lt){
-  header(lt, 3, 'Measure CTR', 'Count exposures and Add-to-Cart clicks per variant.');
+  header(lt, 3, 'Measure CTR', 'Count viewers and the users who clicked, per variant.');
   const d = 14 * P(lt, 1.2, 10.0, k => k);
   const users = N_ARM * d / DAYS;
   const ctrA = cumAt(CUM_A, d), ctrB = cumAt(CUM_B, d);
@@ -485,7 +488,7 @@ function sMeasure(lt){
       cartButton(x + w - 110, y + 36, 160, 40, v, { fs:14, press: lt > 1.2 && lt < 10 ? press : 0, glow:.5 });
       text('Users', x + 26, y + 100, { size:18, w:500, color:C.muted });
       text(fmt(n), x + 26, y + 134, { size:28, w:700 });
-      text('Clicks', x + 26, y + 172, { size:18, w:500, color:C.muted });
+      text('Users who clicked', x + 26, y + 172, { size:18, w:500, color:C.muted });
       text(fmt(k), x + 26, y + 204, { size:28, w:700 });
       text('CTR', x + w - 26, y + 112, { size:18, w:500, color:C.muted, align:'right' });
       text(d > 0.02 ? `${ctr.toFixed(2)}%` : '—', x + w - 26, y + 180, { size:56, w:800, align:'right', color: v === 'A' ? C.text : C.B });
@@ -513,7 +516,7 @@ function sMeasure(lt){
   };
   line(CUM_A, C.A, 3.5); line(CUM_B, C.B, 4);
   // peeking warning
-  const wa = P(lt, 1.6, 2.1) * (1 - P(lt, 4.6, 5.1));
+  const wa = P(lt, 1.6, 2.1) * (1 - P(lt, 3.6, 4.1));
   alpha(wa, () => {
     const x = X(1.9), y = cy0 + 34;
     ctx.save(); ctx.strokeStyle = 'rgba(245,165,36,.7)'; ctx.lineWidth = 2; ctx.setLineDash([4,4]); ctx.beginPath(); ctx.moveTo(X(1), Y(4.31) - 10); ctx.lineTo(x + 10, y + 30); ctx.stroke(); ctx.restore();

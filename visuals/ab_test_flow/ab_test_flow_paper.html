@@ -143,7 +143,7 @@ const BLOCKS = [
   { title:'Design',    sub:'Plan before data' },
   { title:'Randomize', sub:'Hash the user ID' },
   { title:'Allocate',  sub:'Ramp safely, split 50/50' },
-  { title:'Measure',   sub:'Count views & clicks' },
+  { title:'Measure',   sub:'Count viewers & clickers' },
   { title:'Analyze',   sub:'Two-proportion z-test' },
   { title:'Decide',    sub:'Ship or not' },
 ].map((b, i) => ({ ...b, x: MX + (i % 2) * (BW + GAP_X), y: ROWS[Math.floor(i / 2)] }));
@@ -207,12 +207,12 @@ function header(t){
 function cDesign(lt){
   alpha(P(lt, .2, .7, eout), () => {
     text('HYPOTHESIS', 24, 96, { size:13, w:700, font:MONO, color:C.muted, ls:1.5 });
-    text('A blue button gets more Add-to-Cart clicks.', 24, 122, { size:18, w:600 });
+    text('A blue button lifts Add-to-Cart CTR.', 24, 122, { size:18, w:600 });
   });
   alpha(P(lt, 1.1, 1.6, eout), () => {
     text('CTR =', 24, 172, { size:22, w:800 });
-    text('Add-to-Cart clicks', 104, 160, { size:16, w:600 });
-    ctx.save(); ctx.strokeStyle = C.muted; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(104, 168); ctx.lineTo(300, 168); ctx.stroke(); ctx.restore();
+    text('users who clicked Add to Cart', 104, 160, { size:16, w:600 });
+    ctx.save(); ctx.strokeStyle = C.muted; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(104, 168); ctx.lineTo(340, 168); ctx.stroke(); ctx.restore();
     text('product-page viewers', 104, 188, { size:16, w:500, color:C.muted });
   });
   [['Baseline','4.0%'],['Min. effect','+10% rel'],['Alpha','0.05'],['Power','80%']].forEach(([k, v], i) => {
@@ -234,9 +234,11 @@ function cDesign(lt){
 const R = { box:{ x:150, y:148, w:150, h:84 }, A:{ x:334, y:82, w:116, h:100 }, B:{ x:334, y:206, w:116, h:100 } };
 const DOTS = (() => {
   const r = mulberry(20261127), arr = [];
-  for (let i = 0; i < 70; i++){
-    const bucket = Math.floor(r()*100);
-    arr.push({ ts: 2.8 + i * (4.4/70) + r()*.04, v: bucket < 50 ? 'A' : 'B', y0: 96 + r()*180, jy: (r()-.5)*50 });
+  // 34 A + 35 B, shuffled; with the example user (A) the stream ends exactly 35 / 35
+  const vs = Array.from({ length:69 }, (_, i) => i < 34 ? 'A' : 'B');
+  for (let i = vs.length - 1; i > 0; i--){ const j = Math.floor(r() * (i + 1)); [vs[i], vs[j]] = [vs[j], vs[i]]; }
+  for (let i = 0; i < vs.length; i++){
+    arr.push({ ts: 2.8 + i * (4.4/70) + r()*.04, v: vs[i], y0: 96 + r()*180, jy: (r()-.5)*50 });
   }
   return arr;
 })();
@@ -257,10 +259,11 @@ function cRandom(lt){
       const d = R[v];
       card(d.x, d.y, d.w, d.h, { fill:C.card2, r:12, stroke: v === 'B' ? 'rgba(47,91,255,.35)' : C.line });
       text(`VARIANT ${v}`, d.x + 12, d.y + 22, { size:11, w:700, font:MONO, color: v === 'A' ? C.text : C.B, ls:1 });
-      cartButton(d.x + d.w/2, d.y + 46, 96, 26, v, { fs:10, glow:.4 });
-      const n = v === 'A' ? nA : nB;
-      text(fmt(n), d.x + 12, d.y + 88, { size:22, w:800 });
-      text('users', d.x + 18 + measure(fmt(n), 22, 800), d.y + 88, { size:12, w:500, color:C.muted });
+      cartButton(d.x + d.w/2, d.y + 42, 96, 26, v, { fs:10, glow:.4 });
+      const n = v === 'A' ? nA : nB, tot = nA + nB;
+      const share = tot >= 6 ? `${(100 * n / tot).toFixed(1)}%` : '—';
+      text(share, d.x + 12, d.y + 80, { size:21, w:800 });
+      text('of visitors', d.x + 12, d.y + 94, { size:11, w:500, color:C.muted });
     }
   });
   for (const d of DOTS){ const q = dotPos(d, lt); if (!q || q.a <= 0) continue;
@@ -309,7 +312,7 @@ function cAlloc(lt){
   alpha(P(lt, .5, 1.0, eout), () => {
     text('EXPOSURE', px, 98, { size:12, w:700, font:MONO, color:C.muted, ls:1.5 });
     text(`${Math.round(expo)}%`, px, 144, { size:40, w:800 });
-    text(lt < s2 ? 'day-1 ramp' : 'full rollout', px + pw, 98, { size:12, w:600, font:MONO, color:C.muted, align:'right' });
+    text(lt < s2 ? 'safety ramp' : 'full rollout', px + pw, 98, { size:12, w:600, font:MONO, color:C.muted, align:'right' });
     ctx.save(); rr(px, 156, pw, 10, 5); ctx.fillStyle = C.card2; ctx.fill(); rr(px, 156, pw * expo/100, 10, 5); ctx.fillStyle = C.text; ctx.fill(); ctx.restore();
     text('SPLIT (fixed)', px, 198, { size:12, w:700, font:MONO, color:C.muted, ls:1.5 });
     ctx.save(); rr(px, 208, pw/2 - 2, 30, 8); ctx.fillStyle = C.A; ctx.fill(); rr(px + pw/2 + 2, 208, pw/2 - 2, 30, 8); ctx.fillStyle = C.Bd; ctx.fill(); ctx.restore();
@@ -337,7 +340,7 @@ function cMeasure(lt, active){
       text(v === 'A' ? 'A · WHITE (control)' : 'B · BLUE', x + 12, 100, { size:11, w:700, font:MONO, color: v === 'A' ? C.text : C.B, ls:1 });
       text(d > .02 ? `${c.toFixed(2)}%` : '—', x + 12, 142, { size:28, w:800, color: v === 'A' ? C.text : C.B });
       text(`${fmt(users)} users`, x + w - 12, 118, { size:12, w:500, color:C.muted, align:'right' });
-      text(`${fmt(k)} clicks`, x + w - 12, 140, { size:12, w:500, color:C.muted, align:'right' });
+      text(`${fmt(k)} clicked`, x + w - 12, 140, { size:12, w:500, color:C.muted, align:'right' });
     });
   });
   const x0 = 62, x1 = 400, y0 = 182, y1 = 288, lo = 3.5, hi = 5.0;
@@ -361,7 +364,7 @@ function cMeasure(lt, active){
     ctx.beginPath(); ctx.arc(xe, ye, 4, 0, Math.PI*2); ctx.fill(); ctx.restore();
   };
   line(CUM_A, C.A, 2.5); line(CUM_B, C.B, 3);
-  alpha(P(lt, 1.1, 1.5) * (1 - P(lt, 3.8, 4.2)), () => {
+  alpha(P(lt, 1.1, 1.5) * (1 - P(lt, 2.8, 3.2)), () => {
     chip('Day 1: A leads? Noise. Don’t peek!', X(1.6), y0 - 6, { size:12, font:SANS, w:700, color:C.amber, fill:'rgba(184,98,0,.13)', stroke:'rgba(184,98,0,.6)', h:26 });
   });
   alpha(P(lt, 8.8, 9.2), () => {
