@@ -8,7 +8,8 @@ A Python toolkit for designing and analyzing A/B tests.
 | `abtest.frequentist` | Two-proportion z-test and Welch's t-test with confidence intervals |
 | `abtest.bayesian` | Beta-Binomial posterior: P(B > A), expected lift, expected loss |
 | `abtest.sequential` | Mixture SPRT with always-valid p-values, safe to check at every look |
-| `abtest.diagnostics` | Sample ratio mismatch (SRM) check: chi-square test of the observed split |
+| `abtest.diagnostics` | Sample ratio mismatch (SRM) check; A/A simulator that replays random splits to validate an analysis |
+| `abtest.variance_reduction` | CUPED: adjust with pre-experiment data for tighter CIs, same effect |
 | `abtest.ratio` | Delta-method variance and z-test for ratio metrics (CTR, revenue per session) |
 
 ## Apps
@@ -37,6 +38,8 @@ from abtest import (
     msprt_proportions,
     srm_test,
     ratio_metric_test,
+    cuped,
+    aa_test_simulation,
 )
 
 sample_size_proportions(baseline=0.10, mde=0.10, relative=True)  # per-arm n
@@ -47,6 +50,10 @@ msprt_proportions(100, 1000, 130, 1000).always_valid_p
 srm_test([821_588, 815_482]).srm_detected  # True: p ≈ 1.8e-6, don't trust results
 # per-user clicks and page views for control and treatment
 ratio_metric_test(clicks_a, views_a, clicks_b, views_b).relative_effect
+# in-experiment metric and the same metric from the pre-period, per user
+cuped(y_a, pre_a, y_b, pre_b).variance_reduction
+# does the analysis give ~5% false positives on historical data with no treatment?
+aa_test_simulation(historical_metric).looks_valid
 ```
 
 ## Development
