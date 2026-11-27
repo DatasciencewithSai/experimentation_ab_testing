@@ -1,11 +1,12 @@
-// Render ab_test_flow.html to MP4 (1080x1080, 30 fps, H.264) frame by frame.
+// Render an explainer page to MP4 (30 fps, H.264) frame by frame. Default page: ab_test_flow.html (1080x1080).
 // Usage: node render.js [out.mp4] [fps]      |  node render.js --stills dir t1 t2 ...
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-const page_url = 'file://' + path.join(__dirname, 'ab_test_flow.html') + '?render=1';
+// PAGE=ab_test_flow_onepage.html node render.js out.mp4  renders the one-page version
+const page_url = 'file://' + path.join(__dirname, process.env.PAGE || 'ab_test_flow.html') + '?render=1';
 
 (async () => {
   const browser = await chromium.launch();
