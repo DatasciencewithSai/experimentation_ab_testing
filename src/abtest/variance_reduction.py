@@ -45,6 +45,17 @@ def _check_pair(y, x, name: str) -> tuple[np.ndarray, np.ndarray]:
     return y, x
 
 
+def _cuped_adjust(ya, xa, yb, xb) -> tuple[np.ndarray, np.ndarray, float]:
+    """CUPED-adjusted metric for each arm, using theta pooled over both arms."""
+    y, x = np.concatenate([ya, yb]), np.concatenate([xa, xb])
+    var_x = x.var(ddof=1)
+    if var_x == 0:
+        raise ValueError("covariate is constant, so it cannot reduce variance")
+    theta = float(np.cov(y, x, ddof=1)[0, 1] / var_x)
+    x_mean = x.mean()
+    return ya - theta * (xa - x_mean), yb - theta * (xb - x_mean), theta
+
+
 def cuped(
     metric_a,
     covariate_a,
@@ -68,19 +79,10 @@ def cuped(
         raise ValueError("alpha must be in (0, 1)")
     ya, xa = _check_pair(metric_a, covariate_a, "control")
     yb, xb = _check_pair(metric_b, covariate_b, "treatment")
-
-    y, x = np.concatenate([ya, yb]), np.concatenate([xa, xb])
-    var_x = x.var(ddof=1)
-    if var_x == 0:
-        raise ValueError("covariate is constant, so it cannot reduce variance")
-    theta = float(np.cov(y, x, ddof=1)[0, 1] / var_x)
-    x_mean = x.mean()
-
-    adj_a = ya - theta * (xa - x_mean)
-    adj_b = yb - theta * (xb - x_mean)
+    adj_a, adj_b, theta = _cuped_adjust(ya, xa, yb, xb)
     adjusted = welch_ttest(adj_a, adj_b, alpha=alpha)
 
-    var_y = y.var(ddof=1)
+    var_y = np.concatenate([ya, yb]).var(ddof=1)
     var_adj = np.concatenate([adj_a, adj_b]).var(ddof=1)
     reduction = float(1 - var_adj / var_y) if var_y > 0 else 0.0
 

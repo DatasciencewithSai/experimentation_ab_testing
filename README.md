@@ -10,6 +10,7 @@ A Python toolkit for designing and analyzing A/B tests.
 | `abtest.sequential` | Mixture SPRT with always-valid p-values, safe to check at every look |
 | `abtest.diagnostics` | Sample ratio mismatch (SRM) check; A/A simulator that replays random splits to validate an analysis |
 | `abtest.variance_reduction` | CUPED: adjust with pre-experiment data for tighter CIs, same effect |
+| `abtest.scorecard` | OEC + guardrails + secondary metrics in one report with a ship decision; multiple-testing correction |
 | `abtest.ratio` | Delta-method variance and z-test for ratio metrics (CTR, revenue per session) |
 
 ## Apps
@@ -54,6 +55,26 @@ ratio_metric_test(clicks_a, views_a, clicks_b, views_b).relative_effect
 cuped(y_a, pre_a, y_b, pre_b).variance_reduction
 # does the analysis give ~5% false positives on historical data with no treatment?
 aa_test_simulation(historical_metric).looks_valid
+```
+
+### Scorecard
+
+```python
+from abtest import Metric, scorecard
+
+card = scorecard(
+    [
+        Metric.mean("revenue_per_user", rev_a, rev_b, pre_a, pre_b, role="oec"),  # CUPED
+        Metric.mean(
+            "page_load_s", load_a, load_b, role="guardrail", higher_is_better=False, margin=0.02
+        ),  # at most 2% slower
+        Metric.ratio("ctr", clicks_a, views_a, clicks_b, views_b),
+        Metric.proportion("conversion", 500, 5000, 540, 5000),
+    ],
+    sample_counts=[n_a, n_b],  # SRM check
+)
+card.decision  # "ship" | "don't ship" | "inconclusive" | "invalid"
+print(card.to_markdown())
 ```
 
 ## Development

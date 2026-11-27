@@ -40,6 +40,31 @@ class RatioTestResult:
     relative_ci_high: float
 
 
+def relative_lift(
+    estimate_a: float,
+    variance_a: float,
+    estimate_b: float,
+    variance_b: float,
+    alpha: float = 0.05,
+) -> tuple[float, float, float]:
+    """Relative lift B / A - 1 and its delta-method confidence interval.
+
+    Takes each arm's estimate (a mean, proportion or ratio) and the variance of
+    that estimate, with the arms independent:
+    Var(B/A) ≈ Var(B)/A² + B² Var(A)/A⁴. Returns NaNs when A is 0.
+    """
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    if variance_a < 0 or variance_b < 0:
+        raise ValueError("variances must be non-negative")
+    if estimate_a == 0:
+        return math.nan, math.nan, math.nan
+    rel = estimate_b / estimate_a - 1
+    se = math.sqrt(variance_b / estimate_a**2 + estimate_b**2 * variance_a / estimate_a**4)
+    crit = stats.norm.ppf(1 - alpha / 2)
+    return rel, rel - crit * se, rel + crit * se
+
+
 def _as_unit_arrays(numerator, denominator) -> tuple[np.ndarray, np.ndarray]:
     x = np.asarray(numerator, dtype=float)
     y = np.asarray(denominator, dtype=float)
@@ -97,13 +122,7 @@ def ratio_metric_test(
     z = diff / se if se > 0 else 0.0
     p_value = float(2 * stats.norm.sf(abs(z)))
 
-    if a.ratio == 0:
-        rel = rel_low = rel_high = math.nan
-    else:
-        rel = b.ratio / a.ratio - 1
-        # Var(Rb/Ra) ≈ Var(Rb)/Ra² + Rb² Var(Ra)/Ra⁴ (A and B independent)
-        rel_se = math.sqrt(b.variance / a.ratio**2 + b.ratio**2 * a.variance / a.ratio**4)
-        rel_low, rel_high = rel - crit * rel_se, rel + crit * rel_se
+    rel, rel_low, rel_high = relative_lift(a.ratio, a.variance, b.ratio, b.variance, alpha)
 
     return RatioTestResult(
         effect=diff,
