@@ -126,6 +126,8 @@ def test_aa_unequal_split():
         {"data": [1.0, 2.0, 3.0, 4.0, 5.0], "treatment_share": 1},
         {"data": [1.0, 2.0, 3.0], "treatment_share": 0.5},
         {"data": ([1.0] * 10, [1.0] * 10, [1.0] * 10)},
+        {"data": []},
+        {"data": ()},
     ],
 )
 def test_aa_invalid_inputs(kwargs):

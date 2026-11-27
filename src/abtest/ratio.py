@@ -35,7 +35,7 @@ class RatioTestResult:
     ci_high: float
     ratio_a: float
     ratio_b: float
-    relative_effect: float  # ratio_b / ratio_a - 1
+    relative_effect: float  # (ratio_b - ratio_a) / |ratio_a|
     relative_ci_low: float
     relative_ci_high: float
 
@@ -47,11 +47,12 @@ def relative_lift(
     variance_b: float,
     alpha: float = 0.05,
 ) -> tuple[float, float, float]:
-    """Relative lift B / A - 1 and its delta-method confidence interval.
+    """Relative lift (B - A) / |A| and its delta-method confidence interval.
 
     Takes each arm's estimate (a mean, proportion or ratio) and the variance of
-    that estimate, with the arms independent:
-    Var(B/A) ≈ Var(B)/A² + B² Var(A)/A⁴. Returns NaNs when A is 0.
+    that estimate, with the arms independent. This equals B / A - 1 when A > 0;
+    dividing by |A| keeps the sign meaning "B is higher" when A is negative.
+    Var ≈ Var(B)/A² + B² Var(A)/A⁴. Returns NaNs when A is 0.
     """
     if not 0 < alpha < 1:
         raise ValueError("alpha must be in (0, 1)")
@@ -59,7 +60,7 @@ def relative_lift(
         raise ValueError("variances must be non-negative")
     if estimate_a == 0:
         return math.nan, math.nan, math.nan
-    rel = estimate_b / estimate_a - 1
+    rel = (estimate_b - estimate_a) / abs(estimate_a)
     se = math.sqrt(variance_b / estimate_a**2 + estimate_b**2 * variance_a / estimate_a**4)
     crit = stats.norm.ppf(1 - alpha / 2)
     return rel, rel - crit * se, rel + crit * se
@@ -109,7 +110,7 @@ def ratio_metric_test(
     """Two-sided z-test for the difference in a ratio metric (B - A).
 
     Inputs are per-randomization-unit totals for control (A) and treatment (B).
-    Also returns the relative lift ratio_b / ratio_a - 1 with a delta-method CI.
+    Also returns the relative lift (ratio_b - ratio_a) / |ratio_a| with a delta-method CI.
     """
     if not 0 < alpha < 1:
         raise ValueError("alpha must be in (0, 1)")

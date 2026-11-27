@@ -64,7 +64,9 @@ from abtest import Metric, scorecard
 
 card = scorecard(
     [
-        Metric.mean("revenue_per_user", rev_a, rev_b, pre_a, pre_b, role="oec"),  # CUPED
+        Metric.mean(
+            "revenue_per_user", rev_a, rev_b, covariate_a=pre_a, covariate_b=pre_b, role="oec"
+        ),  # CUPED
         Metric.mean(
             "page_load_s", load_a, load_b, role="guardrail", higher_is_better=False, margin=0.02
         ),  # at most 2% slower

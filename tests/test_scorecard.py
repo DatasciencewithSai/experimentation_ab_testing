@@ -93,7 +93,7 @@ def test_each_metric_matches_its_underlying_test(data):
     pa, pb = data["pre"]
     card = scorecard(
         [
-            Metric.mean("revenue", ra, rb, pa, pb, role="oec"),
+            Metric.mean("revenue", ra, rb, covariate_a=pa, covariate_b=pb, role="oec"),
             Metric.mean("revenue_raw", ra, rb),
             Metric.proportion("conversion", 500, 5000, 560, 5000),
             Metric.ratio("ctr", *data["ctr"]),
@@ -101,7 +101,7 @@ def test_each_metric_matches_its_underlying_test(data):
         correction="none",
     )
     c, w = cuped(ra, pa, rb, pb), welch_ttest(ra, rb)
-    z, r = two_proportion_ztest(500, 5000, 560, 5000), ratio_metric_test(*data["ctr"])
+    z, r = two_proportion_ztest(500, 5000, 560, 5000, pooled=False), ratio_metric_test(*data["ctr"])
     assert card["revenue"].effect == pytest.approx(c.effect)
     assert card["revenue"].p_value == pytest.approx(c.p_value)
     assert card["revenue"].cuped and not card["revenue_raw"].cuped
@@ -115,7 +115,13 @@ def test_each_metric_matches_its_underlying_test(data):
 def test_ship_when_oec_improves_and_guardrails_pass(data):
     card = scorecard(
         [
-            Metric.mean("revenue", *data["rev"], *data["pre"], role="oec"),
+            Metric.mean(
+                "revenue",
+                *data["rev"],
+                covariate_a=data["pre"][0],
+                covariate_b=data["pre"][1],
+                role="oec",
+            ),
             Metric.mean("load_time", *data["load"], role="guardrail", higher_is_better=False),
         ],
         sample_counts=[data["n"], data["n"]],
@@ -188,7 +194,13 @@ def test_secondary_metrics_are_corrected(data):
 def test_to_markdown(data):
     card = scorecard(
         [
-            Metric.mean("revenue", *data["rev"], *data["pre"], role="oec"),
+            Metric.mean(
+                "revenue",
+                *data["rev"],
+                covariate_a=data["pre"][0],
+                covariate_b=data["pre"][1],
+                role="oec",
+            ),
             Metric.proportion("conversion", 500, 5000, 520, 5000),
         ],
         sample_counts=[data["n"], data["n"]],
@@ -234,5 +246,72 @@ def test_invalid_scorecards(data):
     ],
 )
 def test_invalid_metrics(build):
+    with pytest.raises(ValueError):
+        build()
+
+
+# --- regressions from code review -------------------------------------------------
+
+
+def _oec():
+    rng = np.random.default_rng(0)
+    return Metric.mean("oec", rng.normal(size=200), rng.normal(size=200), role="oec")
+
+
+def test_margin_guardrail_with_negative_control_value():
+    # Profit per user is negative in control and improves in treatment: must pass.
+    rng = np.random.default_rng(1)
+    a, b = rng.normal(-10, 1, 2000), rng.normal(-9.5, 1, 2000)
+    g = Metric.mean("profit", a, b, role="guardrail", margin=0.01)
+    r = scorecard([_oec(), g])["profit"]
+    assert r.status == "pass"
+    assert r.relative_effect == pytest.approx(0.05, abs=0.01)  # (B - A) / |A| > 0
+
+
+def test_margin_guardrail_with_zero_control_rate():
+    no_errors = Metric.proportion(
+        "errors", 0, 1000, 0, 1000, role="guardrail", higher_is_better=False, margin=0.1
+    )
+    assert scorecard([_oec(), no_errors])["errors"].status == "pass"
+    new_errors = Metric.proportion(
+        "errors", 0, 1000, 30, 1000, role="guardrail", higher_is_better=False, margin=0.1
+    )
+    assert scorecard([_oec(), new_errors])["errors"].status == "fail"
+
+
+def test_constant_secondary_metric_does_not_crash():
+    card = scorecard([_oec(), Metric.mean("refunds", np.zeros(500), np.zeros(500))])
+    assert card["refunds"].p_value == 1.0
+    assert card["refunds"].status == "neutral"
+
+
+def test_proportion_status_agrees_with_ci():
+    # Very unequal arms near the edge: pooled and unpooled tests can disagree.
+    # Here the pooled test gives p = 0.060 while the unpooled CI excludes 0.
+    pooled = two_proportion_ztest(12, 200, 2000, 20000)
+    assert pooled.p_value > 0.05 and pooled.ci_low > 0
+    card = scorecard([Metric.proportion("conv", 12, 200, 2000, 20000, role="oec")])
+    r = card["conv"]
+    assert r.p_value < 0.05 and r.ci_low > 0
+    assert r.status == "positive"
+    ref = two_proportion_ztest(12, 200, 2000, 20000, pooled=False)
+    assert r.p_value == pytest.approx(ref.p_value)
+
+
+def test_covariates_are_keyword_only():
+    with pytest.raises(TypeError):
+        Metric.mean("x", [1.0, 2.0], [1.0, 2.0], [1.0, 2.0], [1.0, 2.0])
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: Metric.mean("x", [1.0, np.nan], [1.0, 2.0]),
+        lambda: Metric.mean("x", [1.0], [1.0, 2.0]),
+        lambda: Metric.ratio("x", [1.0, 2.0], [1.0], [1.0, 2.0], [1.0, 2.0]),
+        lambda: Metric.ratio("x", [1.0, np.inf], [1.0, 1.0], [1.0, 2.0], [1.0, 2.0]),
+    ],
+)
+def test_metric_inputs_validated_at_construction(build):
     with pytest.raises(ValueError):
         build()

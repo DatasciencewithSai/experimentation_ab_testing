@@ -109,7 +109,8 @@ def aa_test_simulation(
 
     Args:
         data: per-unit values, either one array or a tuple of equal-length arrays
-            (e.g. ``(clicks, views)`` for a ratio metric).
+            (e.g. ``(clicks, views)`` for a ratio metric). Pass several arrays as a
+            tuple, not a list.
         test: called as ``test(*arrays_a, *arrays_b)`` and must return an object
             with a ``p_value`` attribute. Defaults to Welch's t-test for one array
             and the delta-method ratio test for two.
@@ -119,8 +120,12 @@ def aa_test_simulation(
         threshold: ``looks_valid`` is False if either check has p below this.
         seed: random seed, for reproducible results.
     """
-    arrays = (data,) if isinstance(data, np.ndarray) or np.ndim(data[0]) == 0 else tuple(data)
-    arrays = tuple(np.asarray(a) for a in arrays)
+    if isinstance(data, tuple):
+        arrays = tuple(np.asarray(a) for a in data)
+    else:
+        arrays = (np.asarray(data),)
+    if not arrays or any(a.size == 0 for a in arrays):
+        raise ValueError("data must not be empty")
     if any(a.ndim != 1 for a in arrays):
         raise ValueError("data must be one 1-D array or a tuple of 1-D arrays")
     n = arrays[0].size

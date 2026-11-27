@@ -6,9 +6,9 @@ Follows Kohavi, Tang & Xu (2020), ch. 6-7:
   decision is based on. It is tested at ``alpha`` with no correction.
 * **Guardrail** metrics must not get worse. Each is checked on its own (no
   multiple-testing correction, which would make harm harder to detect). With a
-  ``margin`` it is a non-inferiority check: the worst end of the relative-lift
-  CI must stay within the margin. Without one, it fails only on a significant
-  move in the harmful direction.
+  ``margin`` it is a non-inferiority check: the harmful end of the CI on B - A
+  must stay within ``margin * |control|``. Without one, it fails only on a
+  significant move in the harmful direction.
 * **Secondary** metrics explain the result and are not part of the decision. Their
   p-values are adjusted for multiple comparisons (Benjamini-Hochberg by default).
 
@@ -25,7 +25,7 @@ import numpy as np
 
 from abtest.diagnostics import SRMResult, srm_test
 from abtest.frequentist import two_proportion_ztest, welch_ttest
-from abtest.ratio import delta_method_ratio, ratio_metric_test, relative_lift
+from abtest.ratio import _as_unit_arrays, delta_method_ratio, ratio_metric_test, relative_lift
 from abtest.variance_reduction import _check_pair, _cuped_adjust
 
 ROLES = ("oec", "guardrail", "secondary")
@@ -77,7 +77,7 @@ class Metric:
     data: tuple = field(repr=False)
     role: str = "secondary"
     higher_is_better: bool = True
-    margin: float | None = None  # guardrails only: tolerated relative degradation
+    margin: float | None = None  # guardrails only: tolerated degradation, relative to |control|
 
     def __post_init__(self):
         if not self.name:
@@ -93,15 +93,14 @@ class Metric:
                 raise ValueError("margin must be a non-negative relative change, e.g. 0.01")
 
     @classmethod
-    def mean(cls, name, values_a, values_b, covariate_a=None, covariate_b=None, **kwargs):
+    def mean(cls, name, values_a, values_b, *, covariate_a=None, covariate_b=None, **kwargs):
         """Mean of a per-unit metric; pass pre-period covariates to apply CUPED."""
         if (covariate_a is None) != (covariate_b is None):
             raise ValueError("pass covariates for both arms or neither")
         if covariate_a is None:
-            a, b = np.asarray(values_a, dtype=float), np.asarray(values_b, dtype=float)
-            if a.ndim != 1 or b.ndim != 1:
-                raise ValueError("values must be 1-D (one value per unit)")
-            data = (a, b)
+            # values double as their own "covariate" just for validation
+            data = (_check_pair(values_a, values_a, "control")[0],)
+            data += (_check_pair(values_b, values_b, "treatment")[0],)
         else:
             data = (*_check_pair(values_a, covariate_a, "control"),)
             data += (*_check_pair(values_b, covariate_b, "treatment"),)
@@ -118,9 +117,9 @@ class Metric:
     @classmethod
     def ratio(cls, name, numerator_a, denominator_a, numerator_b, denominator_b, **kwargs):
         """Ratio of per-unit sums (e.g. clicks / page views), via the delta method."""
-        return cls(
-            name, "ratio", (numerator_a, denominator_a, numerator_b, denominator_b), **kwargs
-        )
+        data = (*_as_unit_arrays(numerator_a, denominator_a),)
+        data += (*_as_unit_arrays(numerator_b, denominator_b),)
+        return cls(name, "ratio", data, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -132,7 +131,7 @@ class MetricResult:
     effect: float  # B - A
     ci_low: float
     ci_high: float
-    relative_effect: float  # B / A - 1
+    relative_effect: float  # (B - A) / |A|
     relative_ci_low: float
     relative_ci_high: float
     p_value: float
@@ -186,7 +185,7 @@ def _evaluate(metric: Metric, alpha: float) -> dict:
     d = metric.data
     if metric.kind == "proportion":
         sa, na, sb, nb = d
-        r = two_proportion_ztest(sa, na, sb, nb, alpha=alpha)
+        r = two_proportion_ztest(sa, na, sb, nb, alpha=alpha, pooled=False)
         pa, pb = sa / na, sb / nb
         var_a, var_b = pa * (1 - pa) / na, pb * (1 - pb) / nb
         value_a, value_b = pa, pb
@@ -277,8 +276,12 @@ def scorecard(
             if m.margin is None:
                 failed = harmful and r["p_value"] < alpha
             else:
-                worst = r["relative_ci_low"] if m.higher_is_better else -r["relative_ci_high"]
-                failed = math.isnan(worst) or worst < -m.margin
+                # non-inferiority on the absolute CI: harm may not exceed margin * |A|
+                tolerance = m.margin * abs(r["value_a"])
+                if m.higher_is_better:
+                    failed = r["ci_low"] < -tolerance
+                else:
+                    failed = r["ci_high"] > tolerance
             status = "fail" if failed else "pass"
             if failed:
                 if m.margin is None:

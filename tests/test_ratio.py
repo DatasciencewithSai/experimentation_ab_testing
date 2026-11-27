@@ -81,3 +81,9 @@ def test_invalid_inputs(num, den):
 def test_invalid_alpha():
     with pytest.raises(ValueError):
         ratio_metric_test([1, 2], [1, 1], [1, 2], [1, 1], alpha=1.5)
+
+
+def test_relative_effect_sign_with_negative_baseline():
+    a, b = np.array([-10.0, -12.0, -8.0]), np.array([-9.0, -11.0, -7.0])
+    r = ratio_metric_test(a, np.ones(3), b, np.ones(3))
+    assert r.relative_effect == pytest.approx(0.1)  # B is higher, so the lift is positive

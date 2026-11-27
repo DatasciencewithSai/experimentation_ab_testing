@@ -24,20 +24,24 @@ def two_proportion_ztest(
     conversions_b: int,
     n_b: int,
     alpha: float = 0.05,
+    pooled: bool = True,
 ) -> TestResult:
     """Two-sided z-test for difference in proportions (B - A).
 
-    Uses pooled SE for the test statistic and unpooled SE for the CI.
+    The CI always uses the unpooled SE. The test statistic uses the pooled SE
+    (the classic test of p_a == p_b) unless ``pooled=False``, in which case it
+    uses the same unpooled SE so the p-value and CI always agree.
     """
     if n_a <= 0 or n_b <= 0:
         raise ValueError("sample sizes must be positive")
     p_a, p_b = conversions_a / n_a, conversions_b / n_b
     p_pool = (conversions_a + conversions_b) / (n_a + n_b)
     se_pool = math.sqrt(p_pool * (1 - p_pool) * (1 / n_a + 1 / n_b))
-    diff = p_b - p_a
-    z = diff / se_pool if se_pool > 0 else 0.0
-    p_value = 2 * stats.norm.sf(abs(z))
     se = math.sqrt(p_a * (1 - p_a) / n_a + p_b * (1 - p_b) / n_b)
+    diff = p_b - p_a
+    se_test = se_pool if pooled else se
+    z = diff / se_test if se_test > 0 else 0.0
+    p_value = 2 * stats.norm.sf(abs(z))
     crit = stats.norm.ppf(1 - alpha / 2)
     return TestResult(diff, z, p_value, diff - crit * se, diff + crit * se)
 
@@ -50,6 +54,9 @@ def welch_ttest(a, b, alpha: float = 0.05) -> TestResult:
     va, vb = a.var(ddof=1) / a.size, b.var(ddof=1) / b.size
     se = math.sqrt(va + vb)
     diff = b.mean() - a.mean()
+    if se == 0:  # both arms constant: the difference is known exactly
+        t = 0.0 if diff == 0 else math.copysign(math.inf, diff)
+        return TestResult(diff, t, 1.0 if diff == 0 else 0.0, diff, diff)
     df = (va + vb) ** 2 / (va**2 / (a.size - 1) + vb**2 / (b.size - 1))
     t = diff / se
     p_value = 2 * stats.t.sf(abs(t), df)
