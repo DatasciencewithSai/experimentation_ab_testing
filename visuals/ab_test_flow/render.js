@@ -1,5 +1,5 @@
 // Render an explainer page to MP4 (30 fps, H.264) frame by frame. Default page: ab_test_flow.html (1080x1080).
-// Usage: node render.js [out.mp4] [fps]      |  node render.js --stills dir t1 t2 ...
+// Usage: [PAGE=page.html] node render.js [out.mp4] [fps]  |  [PAGE=page.html] node render.js --stills dir t1 t2 ...
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
 const path = require('path');
