@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Peeking and mSPRT</title>
+<style>
+  :root { --bg:#ECE8DE; --fg:#15171C; --muted:#6B675F; --accent:#15171C; --panel:#FFFFFF; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#ECE8DE; } }
+  :root[data-theme="dark"] { --bg:#ECE8DE; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font-family: Inter, system-ui, sans-serif; }
+  .wrap { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:16px; }
+  canvas { width:min(92vw, calc(82vh * 0.8)); aspect-ratio:4/5; height:auto; border-radius:14px; box-shadow:0 20px 60px rgba(21,23,28,.18); display:block; }
+  .controls { width:min(92vw, calc(82vh * 0.8)); display:flex; align-items:center; gap:12px; }
+  button { background:var(--panel); color:var(--fg); border:1px solid #E3DDD1; border-radius:8px; padding:8px 14px; font:600 14px Inter, sans-serif; cursor:pointer; min-width:84px; }
+  input[type=range] { flex:1; accent-color:var(--accent); }
+  .time { font:500 13px "JetBrains Mono", monospace; color:var(--muted); min-width:92px; text-align:right; }
+  body.render .controls { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="c" width="1080" height="1350" aria-label="One-page animated explainer of the peeking problem in A/B testing and the mSPRT fix"></canvas>
+  <div class="controls">
+    <button id="play">Pause</button>
+    <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Timeline">
+    <span class="time" id="time">0.0s</span>
+  </div>
+</div>
+<script>
+(() => {
+const W = 1080, H = 1350;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+const C = {
+  card:'#FFFFFF', card2:'#F3F0E9', line:'#E3DDD1',
+  text:'#15171C', muted:'#6B675F', dim:'#B3AC9F',
+  A:'#8F897E', B:'#2F5BFF', Bd:'#2F5BFF', green:'#0F8A5F', amber:'#B86200'
+};
+const SANS = 'Inter, system-ui, sans-serif';
+const MONO = '"JetBrains Mono", monospace';
+
+// Numbers from visuals/ab_test_flow/peeking_msprt_numbers.py (abtest package, fixed seeds).
+// Example: one simulated A/A test (no real effect), seed 2275, 3,000 users/arm/day, CTR 4%.
+const DAYS = 14;
+const NAIVE_P = [0.245,0.093,0.297,0.092,0.017,0.058,0.038,0.102,0.333,0.261,0.242,0.282,0.403,0.766];
+const AV_P    = [0.982,0.686,0.686,0.676,0.238,0.238,0.238,0.238,0.238,0.238,0.238,0.238,0.238,0.238];
+
+// ---------- helpers ----------
+const clamp = (x, a=0, b=1) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const eio = k => k < .5 ? 4*k*k*k : 1 - Math.pow(-2*k + 2, 3) / 2;
+const eout = k => 1 - Math.pow(1 - k, 3);
+const eback = k => { const c1 = 1.5, c3 = c1 + 1; return 1 + c3*Math.pow(k-1,3) + c1*Math.pow(k-1,2); };
+const lin = k => k;
+const P = (t, a, b, f=eio) => f(clamp((t - a) / (b - a)));
+const fmt = n => Math.round(n).toLocaleString('en-US');
+
+function rr(x, y, w, h, r){ ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function alpha(a, fn){ if (a <= 0.001) return; ctx.save(); ctx.globalAlpha *= clamp(a); fn(); ctx.restore(); }
+function text(s, x, y, o={}){
+  ctx.save();
+  ctx.font = `${o.w||500} ${o.size||20}px ${o.font||SANS}`;
+  ctx.fillStyle = o.color || C.text;
+  ctx.textAlign = o.align || 'left';
+  ctx.textBaseline = o.base || 'alphabetic';
+  if (o.ls) ctx.letterSpacing = o.ls + 'px';
+  ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function measure(s, size, w=500, font=SANS){ ctx.save(); ctx.font = `${w} ${size}px ${font}`; const m = ctx.measureText(s).width; ctx.restore(); return m; }
+function card(x, y, w, h, o={}){
+  ctx.save(); rr(x, y, w, h, o.r || 18);
+  ctx.fillStyle = o.fill || C.card; ctx.fill();
+  if (o.stroke !== 'none'){ ctx.lineWidth = o.lw || 1.5; ctx.strokeStyle = o.stroke || C.line; ctx.stroke(); }
+  ctx.restore();
+}
+function chip(s, x, y, o={}){
+  const size = o.size || 14, padX = o.padX || 12, h = o.h || size + 14;
+  const w = measure(s, size, o.w || 600, o.font || MONO) + padX * 2 + (o.ls ? s.length * o.ls : 0);
+  const x0 = o.align === 'center' ? x - w / 2 : o.align === 'right' ? x - w : x;
+  ctx.save(); rr(x0, y, w, h, h / 2); ctx.fillStyle = o.fill || C.card2; ctx.fill();
+  if (o.stroke){ ctx.strokeStyle = o.stroke; ctx.lineWidth = 1.5; ctx.stroke(); }
+  ctx.restore();
+  text(s, x0 + w / 2, y + h / 2 + 1, { size, w:o.w||600, font:o.font||MONO, color:o.color||C.muted, align:'center', base:'middle', ls:o.ls });
+  return w;
+}
+const AMBER_CHIP = { font:SANS, w:700, color:'#B86200', fill:'rgba(184,98,0,.13)', stroke:'rgba(184,98,0,.6)' };
+const GREEN_CHIP = { w:700, color:'#0F8A5F', fill:'rgba(15,138,95,.12)', stroke:'rgba(15,138,95,.5)' };
+function check(x, y, s, color, k=1, lw){
+  if (k <= 0) return;
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = lw || s * .16; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const p = [[-.42,.02],[-.12,.32],[.45,-.3]];
+  const l1 = Math.hypot(.3,.3), l2 = Math.hypot(.57,.62), d = k * (l1 + l2);
+  ctx.beginPath(); ctx.moveTo(x + p[0][0]*s, y + p[0][1]*s);
+  if (d <= l1){ const f = d/l1; ctx.lineTo(x + lerp(p[0][0],p[1][0],f)*s, y + lerp(p[0][1],p[1][1],f)*s); }
+  else { ctx.lineTo(x + p[1][0]*s, y + p[1][1]*s); const f = (d-l1)/l2; ctx.lineTo(x + lerp(p[1][0],p[2][0],f)*s, y + lerp(p[1][1],p[2][1],f)*s); }
+  ctx.stroke(); ctx.restore();
+}
+function bez(p0, p1, p2, k){ const u = 1-k; return [u*u*p0[0] + 2*u*k*p1[0] + k*k*p2[0], u*u*p0[1] + 2*u*k*p1[1] + k*k*p2[1]]; }
+
+// ---------- layout ----------
+const MX = 48, GAP_X = 36, BW = (W - 2*MX - GAP_X) / 2;   // 474
+const BH = 330, ROWS = [218, 594, 970];
+const BLOCKS = [
+  { title:'The plan',      sub:'Look once, at the end' },
+  { title:'The peek',      sub:'Check p every day' },
+  { title:'Why it breaks', sub:'Simulated A/A tests' },
+  { title:'Common fixes',  sub:'Each has a catch' },
+  { title:'mSPRT',         sub:'Always-valid p-value' },
+  { title:'Proposal',      sub:'What we should do' },
+].map((b, i) => ({ ...b, x: MX + (i % 2) * (BW + GAP_X), y: ROWS[Math.floor(i / 2)] }));
+const HIDE_SUB = [1, 4];   // these blocks show a day counter in the sub-title slot
+const TIMES = [[2.5, 10], [10, 20], [20, 28], [28, 37], [37, 46], [46, 52]];
+const TOTAL = 60;
+
+// connectors between consecutive blocks (polyline points)
+const CONN = [];
+for (let i = 0; i < 5; i++){
+  const a = BLOCKS[i], b = BLOCKS[i+1];
+  if (i % 2 === 0){ const y = a.y + BH/2; CONN.push([[a.x + BW, y], [b.x, y]]); }
+  else {
+    const gy = a.y + BH + (b.y - a.y - BH) / 2;
+    CONN.push([[a.x + BW/2, a.y + BH], [a.x + BW/2, gy], [b.x + BW/2, gy], [b.x + BW/2, b.y]]);
+  }
+}
+function polyLen(pts){ let L = 0; for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]); return L; }
+function polyAt(pts, d){ // point and angle at distance d
+  for (let i = 1; i < pts.length; i++){
+    const s = Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]);
+    if (d <= s || i === pts.length - 1){ const f = clamp(d / s); return { p:[lerp(pts[i-1][0], pts[i][0], f), lerp(pts[i-1][1], pts[i][1], f)], ang: Math.atan2(pts[i][1]-pts[i-1][1], pts[i][0]-pts[i-1][0]), seg:i }; }
+    d -= s;
+  }
+}
+function drawPoly(pts, k){
+  const L = polyLen(pts), at = polyAt(pts, L * k);
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < at.seg; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.lineTo(at.p[0], at.p[1]); ctx.stroke();
+  return at;
+}
+function arrowHead(p, ang, color, s=10){
+  ctx.save(); ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(p[0], p[1]);
+  ctx.lineTo(p[0] - s*Math.cos(ang - .5), p[1] - s*Math.sin(ang - .5));
+  ctx.lineTo(p[0] - s*Math.cos(ang + .5), p[1] - s*Math.sin(ang + .5)); ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+// ---------- background ----------
+function background(){
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, '#F6F3EC'); g.addColorStop(1, '#ECE8DE');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  const rg = ctx.createRadialGradient(W*.85, 60, 10, W*.85, 60, 640);
+  rg.addColorStop(0, 'rgba(255,255,255,.75)'); rg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = rg; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(21,23,28,.045)';
+  for (let x = 30; x < W; x += 36) for (let y = 30; y < H; y += 36) ctx.fillRect(x, y, 2, 2);
+}
+// ---------- header ----------
+function eye(cx, cy, w, open, lookX){
+  const h = w * .42 * open;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(cx - w/2, cy);
+  ctx.quadraticCurveTo(cx, cy - h, cx + w/2, cy);
+  ctx.quadraticCurveTo(cx, cy + h, cx - w/2, cy);
+  ctx.closePath();
+  ctx.fillStyle = '#FFFFFF'; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = C.text; ctx.stroke();
+  if (open > .15){
+    ctx.clip();
+    ctx.beginPath(); ctx.arc(cx + lookX, cy, w * .17, 0, Math.PI*2); ctx.fillStyle = C.text; ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + lookX + w*.05, cy - w*.05, w * .04, 0, Math.PI*2); ctx.fillStyle = '#FFFFFF'; ctx.fill();
+  }
+  ctx.restore();
+}
+function header(t){
+  chip('A/B TESTING, VISUALLY', MX, 40, { size:15, color:C.text, fill:'rgba(21,23,28,.06)', ls:2, h:30 });
+  text('The peeking problem', MX, 128, { size:50, w:800, ls:-1.2 });
+  text('Why checking p every day breaks it  ·  and the fix: mSPRT', MX, 172, { size:21, w:500, color:C.muted });
+  // a blinking, glancing eye: "peeking"
+  const ph = t % 3.2, blink = ph > 2.9 ? Math.abs(Math.cos((ph - 2.9) / .3 * Math.PI)) : 1;
+  const look = 14 * Math.sin(t * 1.3);
+  eye(930, 96, 128, blink, look);
+  text('daily peek', 930, 160, { size:13, w:600, font:MONO, color:C.muted, align:'center' });
+}
+
+// ---------- p-value chart (log scale) ----------
+const LOG_LO = 0.01;
+function pChart(x0, x1, y0, y1, o={}){
+  const X = day => lerp(x0, x1, (day - 1)/(DAYS - 1));
+  const Y = p => lerp(y0, y1, Math.log10(1 / Math.max(p, LOG_LO)) / Math.log10(1 / LOG_LO));
+  ctx.save(); ctx.strokeStyle = C.line; ctx.lineWidth = 1;
+  [1, .3, .1, .01].forEach(v => { ctx.beginPath(); ctx.moveTo(x0, Y(v)); ctx.lineTo(x1, Y(v)); ctx.stroke();
+    text(String(v), x0 - 8, Y(v) + 4, { size:11, w:500, font:MONO, color:C.dim, align:'right' }); });
+  ctx.setLineDash([6, 5]); ctx.strokeStyle = C.amber; ctx.lineWidth = 1.8;
+  ctx.beginPath(); ctx.moveTo(x0, Y(.05)); ctx.lineTo(x1, Y(.05)); ctx.stroke(); ctx.restore();
+  text('0.05', x0 - 8, Y(.05) + 4, { size:11, w:700, font:MONO, color:C.amber, align:'right' });
+  text('Day 1', x0, o.labelY, { size:11, w:500, font:MONO, color:C.dim, align:'center' });
+  text('Day 14', x1, o.labelY, { size:11, w:500, font:MONO, color:C.dim, align:'center' });
+  text(o.caption || 'p-value (log scale)', (x0 + x1)/2, o.labelY, { size:12, w:500, color:C.muted, align:'center' });
+  return { X, Y };
+}
+function pLine(arr, d, X, Y, col, lw, step){
+  if (d < .02) return null;
+  const val = k => { if (k <= 1) return arr[0]; const i = Math.floor(k) - 1, f = k - Math.floor(k);
+    if (i >= DAYS - 1) return arr[DAYS - 1];
+    if (step) return f < 1 ? arr[i] : arr[i + 1];
+    return Math.pow(10, lerp(Math.log10(arr[i]), Math.log10(arr[i + 1]), f)); };
+  ctx.save(); ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(X(1), Y(arr[0]));
+  for (let i = 2; i <= Math.floor(d); i++){ if (step) ctx.lineTo(X(i), Y(arr[i-2])); ctx.lineTo(X(i), Y(arr[i-1])); }
+  const de = Math.max(1, Math.min(DAYS, d)), ye = Y(val(de));
+  if (step && de > Math.floor(de)) ctx.lineTo(X(de), Y(arr[Math.floor(de) - 1]));
+  else ctx.lineTo(X(de), ye);
+  ctx.stroke();
+  const yd = step ? Y(arr[Math.floor(de) - 1]) : ye;
+  ctx.beginPath(); ctx.arc(X(de), yd, 4, 0, Math.PI*2); ctx.fill(); ctx.restore();
+  return [X(de), yd];
+}
+function dayChip(d){
+  chip(`DAY ${Math.max(1, Math.ceil(d - 1e-6))} / 14`, BW - 24, 26, { size:12, color:C.text, align:'right', h:26 });
+}
+
+// ---------- block contents (local coords: 0..BW, 0..BH) ----------
+function cPlan(lt){
+  alpha(P(lt, .2, .7, eout), () => {
+    text('THE RULE OF A CLASSIC TEST', 24, 96, { size:13, w:700, font:MONO, color:C.muted, ls:1.5 });
+    text('Fix the sample size first. Look once.', 24, 122, { size:18, w:600 });
+  });
+  alpha(P(lt, 1.1, 1.6, eout), () => {
+    text('α = 5%', 24, 172, { size:22, w:800 });
+    text('= 1 false “win” in 20 tests…', 116, 162, { size:15, w:600 });
+    text('…but only if you look once.', 116, 184, { size:15, w:500, color:C.muted });
+  });
+  [['Baseline','4.0%'],['Min. effect','+10% rel'],['Alpha','0.05'],['Power','80%']].forEach(([k, v], i) => {
+    alpha(P(lt, 2.0 + i*.18, 2.5 + i*.18, eout), () => {
+      const x = 24 + i * 109;
+      card(x, 206, 99, 58, { fill:C.card2, r:10, stroke:'none' });
+      text(k, x + 10, 226, { size:12, w:500, color:C.muted });
+      text(v, x + 10, 252, { size:18, w:700 });
+    });
+  });
+  const k = P(lt, 3.6, 4.8, eout);
+  alpha(P(lt, 3.5, 3.8), () => {
+    text(fmt(39475 * k), 24, 308, { size:30, w:800 });
+    text('users / variant', 24 + measure('39,475', 30, 800) + 10, 308, { size:15, w:500, color:C.muted });
+  });
+  alpha(P(lt, 4.8, 5.3), () => text('→ 14 days × 3,000/day', BW - 24, 308, { size:15, w:600, align:'right' }));
+}
+
+function cPeek(lt){
+  const d = DAYS * P(lt, .8, 7.8, lin);
+  alpha(P(lt, .2, .5), () => dayChip(Math.max(d, 1)));
+  let ch;
+  alpha(P(lt, .3, .7), () => { ch = pChart(64, 420, 112, 252, { labelY:276, caption:'daily p-value (log scale)' }); });
+  if (!ch) return;
+  const end = pLine(NAIVE_P, d, ch.X, ch.Y, C.text, 3);
+  // day 5 false win
+  const k5 = P(lt, .8 + 7 * 4/13, .8 + 7 * 4/13 + .3);
+  alpha(k5, () => {
+    const x = ch.X(5), y = ch.Y(.017);
+    ctx.save(); ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI*2); ctx.strokeStyle = C.amber; ctx.lineWidth = 2.5; ctx.stroke(); ctx.restore();
+    chip('Day 5: B +14%, p = 0.017 → ship?!', 24, 74, { size:13, h:28, ...AMBER_CHIP });
+    ctx.save(); ctx.strokeStyle = 'rgba(184,98,0,.6)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, 102); ctx.lineTo(x, y - 10); ctx.stroke(); ctx.restore();
+  });
+  alpha(P(lt, 7.8, 8.2), () => {
+    text('0.77', ch.X(14) + 10, ch.Y(.766) + 4, { size:12, w:700, font:MONO });
+  });
+  alpha(P(lt, 8.0, 8.5, eout), () => {
+    text('Day 14: +1.0%, p = 0.77. There was no real effect.', 24, 308, { size:14, w:600 });
+  });
+  void end;
+}
+
+function cWhy(lt){
+  const rows = [['Look once (day 14): the promised 5%', 5.2, C.A], ['Peek daily, 14 days', 21.7, C.amber], ['Peek daily, 28 days', 27.7, C.amber]];
+  const x0 = 24, x1 = BW - 80, max = 30, X = v => lerp(x0, x1, v / max);
+  alpha(P(lt, .2, .6, eout), () => text('FALSE “WINS” WHEN NOTHING CHANGED', 24, 96, { size:13, w:700, font:MONO, color:C.muted, ls:1.5 }));
+  rows.forEach(([lab, v, col], i) => {
+    const y = 124 + i * 54, k = P(lt, .8 + i*.9, 2.0 + i*.9, eout);
+    alpha(P(lt, .6 + i*.9, 1.0 + i*.9), () => {
+      text(lab, x0, y, { size:14, w:600 });
+      ctx.save(); rr(x0, y + 8, x1 - x0, 20, 6); ctx.fillStyle = C.card2; ctx.fill();
+      if (k > 0){ rr(x0, y + 8, Math.max(8, X(v * k) - x0), 20, 6); ctx.fillStyle = col; ctx.fill(); }
+      ctx.restore();
+      text(`${(v * k).toFixed(1)}%`, X(v * k) + 8, y + 24, { size:16, w:800, font:MONO, color: i ? C.amber : C.text });
+    });
+  });
+  alpha(P(lt, 4.2, 4.8, eout), () => {
+    text('Each peek is one more chance for noise', 24, 296, { size:14, w:600 });
+    text('to cross 0.05. Stop on the first one = 4× the false wins.', 24, 316, { size:14, w:600 });
+  });
+}
+
+function cFixes(lt){
+  const rows = [
+    ['Don’t peek (fixed horizon)', 'Valid, but blind until day 14'],
+    ['Bonferroni: α / 14 per look', 'False wins 2.1%, but power 83% → 58%'],
+    ['Alpha spending (O’Brien–Fleming)', 'Valid, but the looks must be pre-planned'],
+    ['Bayesian “chance to beat”', 'Stopping on it still inflates false wins'],
+  ];
+  rows.forEach(([a, b], i) => {
+    const y = 80 + i * 58;
+    alpha(P(lt, .4 + i*1.4, .9 + i*1.4, eout), () => {
+      card(24, y, BW - 48, 50, { fill:C.card2, r:12, stroke:'none' });
+      text(String(i + 1), 46, y + 31, { size:16, w:800, font:MONO, color:C.muted, align:'center' });
+      text(a, 68, y + 21, { size:15, w:700 });
+      text(b, 68, y + 40, { size:12.5, w:500, color:C.muted });
+      ctx.save(); ctx.beginPath(); ctx.arc(BW - 46, y + 25, 9, 0, Math.PI*2); ctx.fillStyle = 'rgba(184,98,0,.15)'; ctx.fill(); ctx.restore();
+      text('!', BW - 46, y + 30, { size:13, w:800, color:C.amber, align:'center' });
+    });
+  });
+}
+
+function cMsprt(lt){
+  const d = DAYS * P(lt, .8, 6.8, lin);
+  alpha(P(lt, .2, .5), () => dayChip(Math.max(d, 1)));
+  let ch;
+  alpha(P(lt, .3, .7), () => { ch = pChart(64, 420, 90, 222, { labelY:246, caption:'same test, log scale' }); });
+  if (!ch) return;
+  alpha(.55 * P(lt, .3, .8), () => pLine(NAIVE_P, DAYS, ch.X, ch.Y, C.dim, 2));
+  pLine(AV_P, d, ch.X, ch.Y, C.text, 3.5, true);
+  alpha(P(lt, .6, 1.0), () => {
+    text('naive p', ch.X(5) + 12, ch.Y(.017) + 4, { size:12, w:600, color:C.dim });
+    text('mSPRT p', ch.X(5.3), ch.Y(.238) - 8, { size:12, w:700 });
+  });
+  alpha(P(lt, 6.8, 7.2), () => text('0.24', ch.X(14) + 10, ch.Y(.238) + 4, { size:12, w:700, font:MONO }));
+  let cx = 24;
+  [['stop: Λ ≥ 1/α = 20', null], ['τ = 0.4 pp', null], ['✓ no false win', 'g']].forEach(([s, g], i) => {
+    const a = P(lt, 7.0 + i*.35, 7.4 + i*.35, eout), w = measure(s, 13, 700, MONO) + 24;
+    alpha(a, () => chip(s, cx, 272, { size:13, w:700, h:30, color:C.text, ...(g ? GREEN_CHIP : {}) }));
+    cx += w + 8;
+  });
+  alpha(P(lt, 7.8, 8.3, eout), () => text('p only goes down, and is valid at every look.', 24, 324, { size:13, w:600, color:C.muted }));
+}
+
+function cPropose(lt){
+  const a0 = P(lt, .1, .6, eback);
+  alpha(P(lt, .1, .4), () => {
+    ctx.save(); ctx.translate(54, 116); ctx.scale(a0, a0);
+    ctx.beginPath(); ctx.arc(0, 0, 28, 0, Math.PI*2); ctx.fillStyle = 'rgba(15,138,95,.15)'; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = C.green; ctx.stroke(); ctx.restore();
+    check(54, 117, 32, C.green, P(lt, .4, .9));
+  });
+  alpha(P(lt, .4, .9, eout), () => {
+    text('RECOMMENDATION', 98, 100, { size:12, w:700, font:MONO, color:C.muted, ls:2 });
+    text('Monitor with mSPRT', 98, 132, { size:30, w:800, ls:-.5 });
+  });
+  alpha(P(lt, 1.0, 1.5, eout), () => {
+    text('Peek any day. Stop when the always-valid', 24, 180, { size:15, w:600 });
+    text('p < 0.05. Cap at 2× the plan (28 days).', 24, 202, { size:15, w:600 });
+  });
+  [['1.4%', 'false wins, peeking'], ['90%', 'power at +10% lift'], ['day 5', 'median stop, +20%']].forEach(([v, k], i) => {
+    alpha(P(lt, 1.8 + i*.25, 2.3 + i*.25, eout), () => {
+      const w = 135, x = 24 + i * (w + 10);
+      card(x, 228, w, 76, { fill:C.card2, r:12, stroke:'none' });
+      text(v, x + w/2, 264, { size:24, w:800, align:'center', color: i === 0 ? C.green : C.text });
+      text(k, x + w/2, 290, { size:12, w:500, align:'center', color:C.muted });
+    });
+  });
+}
+
+const CONTENT = [cPlan, cPeek, cWhy, cFixes, cMsprt, cPropose];
+
+function block(i, t){
+  const b = BLOCKS[i], [s, e] = TIMES[i];
+  const appear = P(t, .3 + i*.12, .9 + i*.12, eout);
+  if (appear <= 0) return;
+  const state = t < s ? 'pending' : t < e ? 'active' : 'done';
+  const act = P(t, s - .2, s + .3) * (1 - P(t, e - .2, e + .3));
+  alpha(appear, () => {
+    ctx.save(); ctx.translate(b.x, b.y + (1 - appear) * 14);
+    // frame
+    ctx.save();
+    ctx.shadowColor = `rgba(21,23,28,${.06 + .10*act})`; ctx.shadowBlur = 26 + 18*act; ctx.shadowOffsetY = 8 + 6*act;
+    rr(0, 0, BW, BH, 20); ctx.fillStyle = C.card; ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = 1.5 + act; ctx.strokeStyle = act > .05 ? `rgba(21,23,28,${.25 + .75*act})` : C.line; ctx.stroke();
+    ctx.restore();
+    // badge
+    const done = state === 'done', dk = P(t, e, e + .4, eout);
+    ctx.save(); ctx.beginPath(); ctx.arc(38, 40, 17, 0, Math.PI*2);
+    ctx.fillStyle = done ? 'rgba(15,138,95,.18)' : state === 'active' ? C.text : C.card2; ctx.fill();
+    if (done){ ctx.strokeStyle = C.green; ctx.lineWidth = 2; ctx.stroke(); }
+    ctx.restore();
+    if (done) check(38, 41, 18, C.green, dk, 3);
+    else text(String(i + 1).padStart(2, '0'), 38, 41, { size:13, w:700, font:MONO, align:'center', base:'middle', color: state === 'active' ? '#fff' : C.muted });
+    text(b.title, 66, 48, { size:24, w:800, color: state === 'pending' ? C.muted : C.text });
+    if (!HIDE_SUB.includes(i) || state === 'pending') text(b.sub, BW - 24, 46, { size:14, w:500, color: state === 'pending' ? C.dim : C.muted, align:'right' });
+    // content
+    if (state === 'pending'){
+      ctx.save(); ctx.strokeStyle = 'rgba(140,132,118,.35)'; ctx.setLineDash([6, 6]); ctx.lineWidth = 1.5;
+      rr(24, 82, BW - 48, BH - 106, 12); ctx.stroke(); ctx.restore();
+    } else {
+      CONTENT[i](t - s, state === 'active');
+    }
+    ctx.restore();
+  });
+}
+
+function connectors(t){
+  CONN.forEach((pts, i) => {
+    const ap = P(t, .3 + i*.12, .9 + i*.12);
+    alpha(ap, () => {
+      ctx.save(); ctx.strokeStyle = C.dim; ctx.lineWidth = 2; ctx.setLineDash([5, 6]); ctx.lineJoin = 'round';
+      drawPoly(pts, 1); ctx.restore();
+      const k = P(t, TIMES[i][1] - .4, TIMES[i][1] + .4);
+      if (k > 0){
+        ctx.save(); ctx.strokeStyle = C.text; ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        const at = drawPoly(pts, k); ctx.restore();
+        arrowHead(at.p, at.ang, C.text, 11);
+      }
+    });
+  });
+  // outro: a light travels the whole flow
+  const tr = (t - 53) / 3.2;
+  if (tr > 0 && tr < 1){
+    const seg = Math.min(4, Math.floor(tr * 5)), f = tr * 5 - seg, pts = CONN[seg];
+    const at = polyAt(pts, polyLen(pts) * eio(f));
+    ctx.save(); const g = ctx.createRadialGradient(at.p[0], at.p[1], 0, at.p[0], at.p[1], 22);
+    g.addColorStop(0, 'rgba(47,91,255,.85)'); g.addColorStop(1, 'rgba(47,91,255,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(at.p[0], at.p[1], 22, 0, Math.PI*2); ctx.fill(); ctx.restore();
+  }
+}
+
+function footer(t){
+  alpha(P(t, 52.5, 53.5, eout), () =>
+    text('Peeking inflates false wins  ·  mSPRT lets you peek safely', W/2, 1330, { size:19, w:600, align:'center', color:C.muted }));
+}
+
+function render(t){
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  background(); header(t); connectors(t);
+  for (let i = 0; i < 6; i++) block(i, t);
+  footer(t);
+}
+
+// ---------- playback ----------
+const RENDER = new URLSearchParams(location.search).has('render');
+if (RENDER) document.body.classList.add('render');
+window.TOTAL = TOTAL;
+window.renderAt = t => render(t);
+window.ready = Promise.all(['800','700','600','500'].map(w => document.fonts.load(`${w} 40px Inter`))
+  .concat(['700','500'].map(w => document.fonts.load(`${w} 20px "JetBrains Mono"`)))).catch(() => {}).then(() => { render(0); return true; });
+
+if (!RENDER){
+  const btn = document.getElementById('play'), scrub = document.getElementById('scrub'), tl = document.getElementById('time');
+  let playing = true, t = 0, last = null;
+  const loop = now => {
+    if (last == null) last = now;
+    const dt = (now - last) / 1000; last = now;
+    if (playing){ t += dt; if (t >= TOTAL) t = 0; }
+    render(t); scrub.value = Math.round(t / TOTAL * 1000); tl.textContent = `${t.toFixed(1)}s / ${TOTAL}s`;
+    requestAnimationFrame(loop);
+  };
+  window.ready.then(() => requestAnimationFrame(loop));
+  btn.onclick = () => { playing = !playing; btn.textContent = playing ? 'Pause' : 'Play'; };
+  cv.onclick = btn.onclick;
+  scrub.oninput = () => { t = scrub.value / 1000 * TOTAL; };
+}
+})();
+</script>
+</body>
+</html>

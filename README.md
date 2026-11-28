@@ -23,6 +23,11 @@ A Python toolkit for designing and analyzing A/B tests.
 Both were copied from their original repos and still use their own math for now;
 see [docs/REPO_PLAN.md](docs/REPO_PLAN.md) for the plan to move them onto the library.
 
+## Explainers
+
+- [The peeking problem, and why we should monitor tests with mSPRT](docs/peeking_and_msprt.md)
+  (60-second video: [visuals/ab_test_flow/peeking_msprt.mp4](visuals/ab_test_flow/peeking_msprt.mp4))
+
 ## Install
 
 ```bash
